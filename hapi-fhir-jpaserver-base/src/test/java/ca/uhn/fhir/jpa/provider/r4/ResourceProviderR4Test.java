@@ -2669,15 +2669,11 @@ public class ResourceProviderR4Test extends BaseResourceProviderR4Test {
 	@Test
 	public void testMetadata() throws Exception {
 		HttpGet get = new HttpGet(ourServerBase + "/metadata");
-		CloseableHttpResponse response = ourHttpClient.execute(get);
-		try {
+		try (CloseableHttpResponse response = ourHttpClient.execute(get)) {
 			String resp = IOUtils.toString(response.getEntity().getContent(), StandardCharsets.UTF_8);
 			ourLog.info(resp);
 			assertEquals(200, response.getStatusLine().getStatusCode());
 			assertThat(resp, stringContainsInOrder("THIS IS THE DESC"));
-		} finally {
-			response.getEntity().getContent().close();
-			response.close();
 		}
 	}
 
@@ -5130,7 +5126,7 @@ public class ResourceProviderR4Test extends BaseResourceProviderR4Test {
 
 		{
 			Patient readPatient = (Patient) ourClient.read().resource("Patient").withId(patientid).execute();
-			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-f0-9]+"));
+			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-zA-Z0-9]+"));
 		}
 
 		patient.setId(patientid);
@@ -5138,12 +5134,12 @@ public class ResourceProviderR4Test extends BaseResourceProviderR4Test {
 		ourClient.update().resource(patient).execute();
 		{
 			Patient readPatient = (Patient) ourClient.read().resource("Patient").withId(patientid).execute();
-			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-f0-9]+"));
+			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-zA-Z0-9]+"));
 
 			readPatient.addName().setFamily("testUpdateWithSource");
 			ourClient.update().resource(readPatient).execute();
 			readPatient = (Patient) ourClient.read().resource("Patient").withId(patientid).execute();
-			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-f0-9]+"));
+			assertThat(readPatient.getMeta().getSource(), matchesPattern("#[a-zA-Z0-9]+"));
 		}
 	}
 
