@@ -1,5 +1,25 @@
 package ca.uhn.fhir.jpa.term.custom;
 
+/*-
+ * #%L
+ * HAPI FHIR JPA Server
+ * %%
+ * Copyright (C) 2014 - 2019 University Health Network
+ * %%
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ * #L%
+ */
+
 import ca.uhn.fhir.jpa.entity.TermCodeSystemVersion;
 import ca.uhn.fhir.jpa.entity.TermConcept;
 import ca.uhn.fhir.jpa.term.IRecordHandler;
@@ -14,6 +34,7 @@ import org.apache.commons.lang3.Validate;
 
 import javax.annotation.Nonnull;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class CustomTerminologySet {
 
@@ -143,12 +164,28 @@ public class CustomTerminologySet {
 				TermLoaderSvcImpl.iterateOverZipFile(theDescriptors, TermLoaderSvcImpl.CUSTOM_HIERARCHY_FILE, hierarchyHandler, ',', QuoteMode.NON_NUMERIC, false);
 			}
 
-			// Find root concepts
+			Map<String, Integer> codesInOrder = new HashMap<>();
+			for (String nextCode : code2concept.keySet()) {
+				codesInOrder.put(nextCode, codesInOrder.size());
+			}
+
 			List<TermConcept> rootConcepts = new ArrayList<>();
 			for (TermConcept nextConcept : code2concept.values()) {
+
+				// Find root concepts
 				if (nextConcept.getParents().isEmpty()) {
 					rootConcepts.add(nextConcept);
 				}
+
+				// Sort children so they appear in the same order as they did in the concepts.csv file
+				nextConcept.getChildren().sort((o1,o2)->{
+					String code1 = o1.getChild().getCode();
+					String code2 = o2.getChild().getCode();
+					int order1 = codesInOrder.get(code1);
+					int order2 = codesInOrder.get(code2);
+					return order1 - order2;
+				});
+
 			}
 
 			return new CustomTerminologySet(code2concept.size(), unanchoredChildConceptsToParentCodes, rootConcepts);

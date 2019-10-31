@@ -22,7 +22,6 @@ package ca.uhn.fhir.rest.server;
 
 import ca.uhn.fhir.context.ConfigurationException;
 import ca.uhn.fhir.context.FhirContext;
-import ca.uhn.fhir.context.ProvidedResourceScanner;
 import ca.uhn.fhir.context.RuntimeResourceDefinition;
 import ca.uhn.fhir.context.api.AddProfileTagEnum;
 import ca.uhn.fhir.context.api.BundleInclusionRule;
@@ -78,7 +77,8 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.jar.Manifest;
 import java.util.stream.Collectors;
 
-import static org.apache.commons.lang3.StringUtils.*;
+import static org.apache.commons.lang3.StringUtils.isBlank;
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 @SuppressWarnings("WeakerAccess")
 public class RestfulServer extends HttpServlet implements IRestfulServer<ServletRequestDetails> {
@@ -105,7 +105,6 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 	private static final ExceptionHandlingInterceptor DEFAULT_EXCEPTION_HANDLER = new ExceptionHandlingInterceptor();
 	private static final Logger ourLog = LoggerFactory.getLogger(RestfulServer.class);
 	private static final long serialVersionUID = 1L;
-	private static final Random RANDOM = new Random();
 	private final List<Object> myPlainProviders = new ArrayList<>();
 	private final List<IResourceProvider> myResourceProviders = new ArrayList<>();
 	private IInterceptorService myInterceptorService;
@@ -369,7 +368,7 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 			throw new ConfigurationException("Failure scanning class " + clazz.getSimpleName() + ": " + e.getMessage(), e);
 		}
 		if (count == 0) {
-			throw new ConfigurationException("Did not find any annotated RESTful methods on provider class " + theProvider.getClass().getCanonicalName());
+			throw new ConfigurationException("Did not find any annotated RESTful methods on provider class " + theProvider.getClass().getName());
 		}
 	}
 
@@ -666,9 +665,7 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 		Validate.noNullElements(theProviders, "theProviders must not contain any null elements");
 
 		myPlainProviders.clear();
-		if (theProviders != null) {
-			myPlainProviders.addAll(theProviders);
-		}
+		myPlainProviders.addAll(theProviders);
 	}
 
 	/**
@@ -713,9 +710,7 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 		Validate.noNullElements(theProviders, "theProviders must not contain any null elements");
 
 		myResourceProviders.clear();
-		if (theProviders != null) {
-			myResourceProviders.addAll(theProviders);
-		}
+		myResourceProviders.addAll(theProviders);
 	}
 
 	/**
@@ -849,11 +844,7 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 	@SuppressWarnings("WeakerAccess")
 	protected void handleRequest(RequestTypeEnum theRequestType, HttpServletRequest theRequest, HttpServletResponse theResponse) throws ServletException, IOException {
 		String fhirServerBase;
-		ServletRequestDetails requestDetails = newRequestDetails();
-		requestDetails.setServer(this);
-		requestDetails.setRequestType(theRequestType);
-		requestDetails.setServletRequest(theRequest);
-		requestDetails.setServletResponse(theResponse);
+		ServletRequestDetails requestDetails = newRequestDetails(theRequestType, theRequest, theResponse);
 
 		String requestId = getOrCreateRequestId(theRequest);
 		requestDetails.setRequestId(requestId);
@@ -962,6 +953,7 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 				for (String string : parts) {
 					if (string.equals("gzip")) {
 						respondGzip = true;
+						break;
 					}
 				}
 			}
@@ -1096,6 +1088,30 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 		}
 	}
 
+	/**
+	 * Subclasses may override this to customize the way that the RequestDetails object is created. Generally speaking, the
+	 * right way to do this is to override this method, but call the super-implementation (<code>super.newRequestDetails</code>)
+	 * and then customize the returned object before returning it.
+	 *
+	 * @param theRequestType The HTTP request verb
+	 * @param theRequest     The servlet request
+	 * @param theResponse    The servlet response
+	 * @return A ServletRequestDetails instance to be passed to any resource providers, interceptors, etc. that are invoked as a part of serving this request.
+	 */
+	@Nonnull
+	protected ServletRequestDetails newRequestDetails(RequestTypeEnum theRequestType, HttpServletRequest theRequest, HttpServletResponse theResponse) {
+		ServletRequestDetails requestDetails = newRequestDetails();
+		requestDetails.setServer(this);
+		requestDetails.setRequestType(theRequestType);
+		requestDetails.setServletRequest(theRequest);
+		requestDetails.setServletResponse(theResponse);
+		return requestDetails;
+	}
+
+	/**
+	 * @deprecated Deprecated in HAPI FHIR 4.1.0 - Users wishing to override this method should override {@link #newRequestDetails(RequestTypeEnum, HttpServletRequest, HttpServletResponse)} instead
+	 */
+	@Deprecated
 	protected ServletRequestDetails newRequestDetails() {
 		return new ServletRequestDetails(getInterceptorService());
 	}
@@ -1177,9 +1193,6 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 			Object confProvider;
 			try {
 				ourLog.info("Initializing HAPI FHIR restful server running in " + getFhirContext().getVersion().getVersion().name() + " mode");
-
-				ProvidedResourceScanner providedResourceScanner = new ProvidedResourceScanner(getFhirContext());
-				providedResourceScanner.scanForProvidedResources(this);
 
 				Collection<IResourceProvider> resourceProvider = getResourceProviders();
 				// 'true' tells registerProviders() that
@@ -1531,7 +1544,6 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 
 		List<IResourceProvider> newResourceProviders = new ArrayList<>();
 		List<Object> newPlainProviders = new ArrayList<>();
-		ProvidedResourceScanner providedResourceScanner = new ProvidedResourceScanner(getFhirContext());
 
 		if (theProviders != null) {
 			for (Object provider : theProviders) {
@@ -1544,7 +1556,6 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 					if (!inInit) {
 						myResourceProviders.add(rsrcProvider);
 					}
-					providedResourceScanner.scanForProvidedResources(rsrcProvider);
 					newResourceProviders.add(rsrcProvider);
 				} else {
 					if (!inInit) {
@@ -1740,15 +1751,11 @@ public class RestfulServer extends HttpServlet implements IRestfulServer<Servlet
 	 * Unregister a {@code Collection} of providers
 	 */
 	public void unregisterProviders(Collection<?> providers) {
-		ProvidedResourceScanner providedResourceScanner = new ProvidedResourceScanner(getFhirContext());
 		if (providers != null) {
 			for (Object provider : providers) {
 				removeResourceMethods(provider);
 				if (provider instanceof IResourceProvider) {
 					myResourceProviders.remove(provider);
-					IResourceProvider rsrcProvider = (IResourceProvider) provider;
-					Class<? extends IBaseResource> resourceType = rsrcProvider.getResourceType();
-					providedResourceScanner.removeProvidedResources(rsrcProvider);
 				} else {
 					myPlainProviders.remove(provider);
 				}

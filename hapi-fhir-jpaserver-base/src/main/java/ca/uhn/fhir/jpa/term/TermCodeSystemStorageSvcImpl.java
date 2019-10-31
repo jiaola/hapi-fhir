@@ -1,5 +1,25 @@
 package ca.uhn.fhir.jpa.term;
 
+/*-
+ * #%L
+ * HAPI FHIR JPA Server
+ * %%
+ * Copyright (C) 2014 - 2019 University Health Network
+ * %%
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ * #L%
+ */
+
 import ca.uhn.fhir.context.FhirContext;
 import ca.uhn.fhir.context.FhirVersionEnum;
 import ca.uhn.fhir.jpa.dao.BaseHapiFhirDao;
@@ -315,7 +335,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 				populateCodeSystemVersionProperties(persCs, theCodeSystem, theResourceEntity);
 
 				persCs.getConcepts().addAll(BaseTermReadSvcImpl.toPersistedConcepts(theCodeSystem.getConcept(), persCs));
-				ourLog.info("Code system has {} concepts", persCs.getConcepts().size());
+				ourLog.debug("Code system has {} concepts", persCs.getConcepts().size());
 				storeNewCodeSystemVersion(codeSystemResourcePid, codeSystemUrl, theCodeSystem.getName(), theCodeSystem.getVersion(), persCs, theResourceEntity);
 			}
 
@@ -346,7 +366,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 	@Override
 	@Transactional(propagation = Propagation.REQUIRED)
 	public void storeNewCodeSystemVersion(Long theCodeSystemResourcePid, String theSystemUri, String theSystemName, String theSystemVersionId, TermCodeSystemVersion theCodeSystemVersion, ResourceTable theCodeSystemResourceTable) {
-		ourLog.info("Storing code system");
+		ourLog.debug("Storing code system");
 
 		ValidateUtil.isTrueOrThrowInvalidRequest(theCodeSystemVersion.getResource() != null, "No resource supplied");
 		ValidateUtil.isNotBlankOrThrowInvalidRequest(theSystemUri, "No system URI supplied");
@@ -358,15 +378,15 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		 * For now we always delete old versions. At some point it would be nice to allow configuration to keep old versions.
 		 */
 
-		ourLog.info("Deleting old code system versions");
 		for (TermCodeSystemVersion next : existing) {
+			ourLog.info("Deleting old code system version {}", next.getPid());
 			Long codeSystemVersionPid = next.getPid();
 			deleteCodeSystemVersion(codeSystemVersionPid);
 		}
 
-		ourLog.info("Flushing...");
+		ourLog.debug("Flushing...");
 		myConceptDao.flush();
-		ourLog.info("Done flushing");
+		ourLog.debug("Done flushing");
 
 		/*
 		 * Do the upload
@@ -379,7 +399,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		theCodeSystemVersion.setCodeSystemDisplayName(theSystemName);
 		theCodeSystemVersion.setCodeSystemVersionId(theSystemVersionId);
 
-		ourLog.info("Validating all codes in CodeSystem for storage (this can take some time for large sets)");
+		ourLog.debug("Validating all codes in CodeSystem for storage (this can take some time for large sets)");
 
 		// Validate the code system
 		ArrayList<String> conceptsStack = new ArrayList<>();
@@ -389,34 +409,32 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 			totalCodeCount += validateConceptForStorage(next, theCodeSystemVersion, conceptsStack, allConcepts);
 		}
 
-		ourLog.info("Saving version containing {} concepts", totalCodeCount);
+		ourLog.debug("Saving version containing {} concepts", totalCodeCount);
 
 		TermCodeSystemVersion codeSystemVersion = myCodeSystemVersionDao.saveAndFlush(theCodeSystemVersion);
 
-		ourLog.info("Saving code system");
+		ourLog.debug("Saving code system");
 
 		codeSystem.setCurrentVersion(theCodeSystemVersion);
 		codeSystem = myCodeSystemDao.saveAndFlush(codeSystem);
 
-		ourLog.info("Setting CodeSystemVersion[{}] on {} concepts...", codeSystem.getPid(), totalCodeCount);
+		ourLog.debug("Setting CodeSystemVersion[{}] on {} concepts...", codeSystem.getPid(), totalCodeCount);
 
 		for (TermConcept next : theCodeSystemVersion.getConcepts()) {
 			populateVersion(next, codeSystemVersion);
 		}
 
-		ourLog.info("Saving {} concepts...", totalCodeCount);
+		ourLog.debug("Saving {} concepts...", totalCodeCount);
 
 		IdentityHashMap<TermConcept, Object> conceptsStack2 = new IdentityHashMap<>();
 		for (TermConcept next : theCodeSystemVersion.getConcepts()) {
 			persistChildren(next, codeSystemVersion, conceptsStack2, totalCodeCount);
 		}
 
-		ourLog.info("Done saving concepts, flushing to database");
+		ourLog.debug("Done saving concepts, flushing to database");
 
 		myConceptDao.flush();
 		myConceptParentChildLinkDao.flush();
-
-		ourLog.info("Done deleting old code system versions");
 
 		if (myDeferredStorageSvc.isStorageQueueEmpty() == false) {
 			ourLog.info("Note that some concept saving has been deferred");
@@ -431,7 +449,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		// Parent/Child links
 		{
 			String descriptor = "parent/child links";
-			Supplier<Slice<TermConceptParentChildLink>> loader = () -> myConceptParentChildLinkDao.findByCodeSystemVersion(page1000, theCodeSystemVersionPid);
+			Supplier<Slice<Long>> loader = () -> myConceptParentChildLinkDao.findIdsByCodeSystemVersion(page1000, theCodeSystemVersionPid);
 			Supplier<Integer> counter = () -> myConceptParentChildLinkDao.countByCodeSystemVersion(theCodeSystemVersionPid);
 			doDelete(descriptor, loader, counter, myConceptParentChildLinkDao);
 		}
@@ -439,7 +457,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		// Properties
 		{
 			String descriptor = "concept properties";
-			Supplier<Slice<TermConceptProperty>> loader = () -> myConceptPropertyDao.findByCodeSystemVersion(page1000, theCodeSystemVersionPid);
+			Supplier<Slice<Long>> loader = () -> myConceptPropertyDao.findIdsByCodeSystemVersion(page1000, theCodeSystemVersionPid);
 			Supplier<Integer> counter = () -> myConceptPropertyDao.countByCodeSystemVersion(theCodeSystemVersionPid);
 			doDelete(descriptor, loader, counter, myConceptPropertyDao);
 		}
@@ -447,7 +465,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		// Designations
 		{
 			String descriptor = "concept designations";
-			Supplier<Slice<TermConceptDesignation>> loader = () -> myConceptDesignationDao.findByCodeSystemVersion(page1000, theCodeSystemVersionPid);
+			Supplier<Slice<Long>> loader = () -> myConceptDesignationDao.findIdsByCodeSystemVersion(page1000, theCodeSystemVersionPid);
 			Supplier<Integer> counter = () -> myConceptDesignationDao.countByCodeSystemVersion(theCodeSystemVersionPid);
 			doDelete(descriptor, loader, counter, myConceptDesignationDao);
 		}
@@ -457,7 +475,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 			String descriptor = "concepts";
 			// For some reason, concepts are much slower to delete, so use a smaller batch size
 			PageRequest page100 = PageRequest.of(0, 100);
-			Supplier<Slice<TermConcept>> loader = () -> myConceptDao.findByCodeSystemVersion(page100, theCodeSystemVersionPid);
+			Supplier<Slice<Long>> loader = () -> myConceptDao.findIdsByCodeSystemVersion(page100, theCodeSystemVersionPid);
 			Supplier<Integer> counter = () -> myConceptDao.countByCodeSystemVersion(theCodeSystemVersionPid);
 			doDelete(descriptor, loader, counter, myConceptDao);
 		}
@@ -552,7 +570,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 		// case for concepts being added to an existing child concept, but won't be the case when
 		// we're recursively adding children)
 		for (TermConcept nextParentConcept : parentConcepts) {
-			if (nextParentConcept.getChildren().stream().noneMatch(t->t.getChild().getCode().equals(nextCodeToAdd))) {
+			if (nextParentConcept.getChildren().stream().noneMatch(t -> t.getChild().getCode().equals(nextCodeToAdd))) {
 				TermConceptParentChildLink parentLink = new TermConceptParentChildLink();
 				parentLink.setParent(nextParentConcept);
 				parentLink.setChild(nextConceptToAdd);
@@ -592,7 +610,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 			return;
 		}
 
-		if (theConceptsStack.size() == 1 || theConceptsStack.size() % 10000 == 0) {
+		if ((theConceptsStack.size() + 1) % 10000 == 0) {
 			float pct = (float) theConceptsStack.size() / (float) theTotalConcepts;
 			ourLog.info("Have processed {}/{} concepts ({}%)", theConceptsStack.size(), theTotalConcepts, (int) (pct * 100.0f));
 		}
@@ -698,14 +716,14 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 	}
 
 
-	private <T> void doDelete(String theDescriptor, Supplier<Slice<T>> theLoader, Supplier<Integer> theCounter, JpaRepository<T, ?> theDao) {
+	private <T> void doDelete(String theDescriptor, Supplier<Slice<Long>> theLoader, Supplier<Integer> theCounter, JpaRepository<T, Long> theDao) {
 		int count;
 		ourLog.info(" * Deleting {}", theDescriptor);
 		int totalCount = theCounter.get();
 		StopWatch sw = new StopWatch();
 		count = 0;
 		while (true) {
-			Slice<T> link = theLoader.get();
+			Slice<Long> link = theLoader.get();
 			if (!link.hasContent()) {
 				break;
 			}
@@ -713,7 +731,7 @@ public class TermCodeSystemStorageSvcImpl implements ITermCodeSystemStorageSvc {
 			TransactionTemplate txTemplate = new TransactionTemplate(myTransactionManager);
 			txTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
 			txTemplate.execute(t -> {
-				theDao.deleteAll(link);
+				link.forEach(id -> theDao.deleteById(id));
 				return null;
 			});
 

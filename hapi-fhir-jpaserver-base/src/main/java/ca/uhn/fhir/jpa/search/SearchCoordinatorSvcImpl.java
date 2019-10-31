@@ -155,6 +155,7 @@ public class SearchCoordinatorSvcImpl implements ISearchCoordinatorSvc {
 	@Override
 	public void cancelAllActiveSearches() {
 		for (SearchTask next : myIdToSearchTask.values()) {
+			ourLog.info("Requesting immediate abort of search: {}", next.getSearch().getUuid());
 			next.requestImmediateAbort();
 			AsyncUtil.awaitLatchAndIgnoreInterrupt(next.getCompletionLatch(), 30, TimeUnit.SECONDS);
 		}
@@ -209,11 +210,7 @@ public class SearchCoordinatorSvcImpl implements ISearchCoordinatorSvc {
 
 			search = mySearchCacheSvc
 				.fetchByUuid(theUuid)
-				.orElseThrow(() -> {
-					ourLog.trace("Client requested unknown paging ID[{}]", theUuid);
-					String msg = myContext.getLocalizer().getMessage(PageMethodBinding.class, "unknownSearchId", theUuid);
-					return new ResourceGoneException(msg);
-				});
+				.orElseThrow(() -> newResourceGoneException(theUuid));
 
 			verifySearchHasntFailedOrThrowInternalErrorException(search);
 			if (search.getStatus() == SearchStatusEnum.FINISHED) {
@@ -252,10 +249,20 @@ public class SearchCoordinatorSvcImpl implements ISearchCoordinatorSvc {
 		ourLog.trace("Finished looping");
 
 		List<Long> pids = mySearchResultCacheSvc.fetchResultPids(search, theFrom, theTo);
+		if (pids == null) {
+			throw newResourceGoneException(theUuid);
+		}
 
 		ourLog.trace("Fetched {} results", pids.size());
 
 		return pids;
+	}
+
+	@Nonnull
+	private ResourceGoneException newResourceGoneException(String theUuid) {
+		ourLog.trace("Client requested unknown paging ID[{}]", theUuid);
+		String msg = myContext.getLocalizer().getMessage(PageMethodBinding.class, "unknownSearchId", theUuid);
+		return new ResourceGoneException(msg);
 	}
 
 
@@ -625,6 +632,7 @@ public class SearchCoordinatorSvcImpl implements ISearchCoordinatorSvc {
 		Integer awaitInitialSync() {
 			ourLog.trace("Awaiting initial sync");
 			do {
+				ourLog.trace("Search {} aborted: {}", getSearch().getUuid(), !isNotAborted());
 				if (AsyncUtil.awaitLatchAndThrowInternalErrorExceptionOnInterrupt(getInitialCollectionLatch(), 250L, TimeUnit.MILLISECONDS)) {
 					break;
 				}
@@ -1101,14 +1109,21 @@ public class SearchCoordinatorSvcImpl implements ISearchCoordinatorSvc {
 				txTemplate.afterPropertiesSet();
 				txTemplate.execute(t -> {
 					List<Long> previouslyAddedResourcePids = mySearchResultCacheSvc.fetchAllResultPids(getSearch());
+					if (previouslyAddedResourcePids == null) {
+						throw newResourceGoneException(getSearch().getUuid());
+					}
+
 					ourLog.debug("Have {} previously added IDs in search: {}", previouslyAddedResourcePids.size(), getSearch().getUuid());
 					setPreviouslyAddedResourcePids(previouslyAddedResourcePids);
 					return null;
 				});
 			} catch (Throwable e) {
 				ourLog.error("Failure processing search", e);
-				getSearch().setFailureMessage(e.toString());
+				getSearch().setFailureMessage(e.getMessage());
 				getSearch().setStatus(SearchStatusEnum.FAILED);
+				if (e instanceof BaseServerResponseException) {
+					getSearch().setFailureCode(((BaseServerResponseException) e).getStatusCode());
+				}
 
 				saveSearch();
 				return null;

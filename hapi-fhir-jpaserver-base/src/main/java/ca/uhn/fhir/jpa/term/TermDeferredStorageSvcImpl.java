@@ -1,5 +1,25 @@
 package ca.uhn.fhir.jpa.term;
 
+/*-
+ * #%L
+ * HAPI FHIR JPA Server
+ * %%
+ * Copyright (C) 2014 - 2019 University Health Network
+ * %%
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ * #L%
+ */
+
 import ca.uhn.fhir.jpa.dao.DaoConfig;
 import ca.uhn.fhir.jpa.dao.data.ITermConceptDao;
 import ca.uhn.fhir.jpa.dao.data.ITermConceptParentChildLinkDao;
@@ -53,7 +73,7 @@ public class TermDeferredStorageSvcImpl implements ITermDeferredStorageSvc {
 	@Autowired
 	private ITermVersionAdapterSvc myTerminologyVersionAdapterSvc;
 	@Autowired
-	private ITermCodeSystemStorageSvc myConceptStorageSvc;
+	private ITermCodeSystemStorageSvc myCodeSystemStorageSvc;
 
 	@Override
 	public void addConceptToStorageQueue(TermConcept theConcept) {
@@ -102,7 +122,7 @@ public class TermDeferredStorageSvcImpl implements ITermDeferredStorageSvc {
 		ourLog.info("Saving {} deferred concepts...", count);
 		while (codeCount < count && myDeferredConcepts.size() > 0) {
 			TermConcept next = myDeferredConcepts.remove(0);
-			codeCount += myConceptStorageSvc.saveConcept(next);
+			codeCount += myCodeSystemStorageSvc.saveConcept(next);
 		}
 
 		if (codeCount > 0) {
@@ -163,28 +183,38 @@ public class TermDeferredStorageSvcImpl implements ITermDeferredStorageSvc {
 			return;
 		}
 
-		TransactionTemplate tt = new TransactionTemplate(myTransactionMgr);
-		tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-		if (isDeferredConceptsOrConceptLinksToSaveLater()) {
-			tt.execute(t -> {
-				processDeferredConcepts();
-				return null;
-			});
-		}
+		for (int i = 0; i < 10; i++) {
 
-		if (isDeferredValueSets()) {
-			tt.execute(t -> {
-				processDeferredValueSets();
-				return null;
-			});
-		}
-		if (isDeferredConceptMaps()) {
-			tt.execute(t -> {
-				processDeferredConceptMaps();
-				return null;
-			});
-		}
+			if (!isDeferredConcepts() &&
+				!isConceptLinksToSaveLater() &&
+				!isDeferredValueSets() &&
+				!isDeferredConceptMaps()) {
+				return;
+			}
 
+			TransactionTemplate tt = new TransactionTemplate(myTransactionMgr);
+			tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+			if (isDeferredConceptsOrConceptLinksToSaveLater()) {
+				tt.execute(t -> {
+					processDeferredConcepts();
+					return null;
+				});
+			}
+
+			if (isDeferredValueSets()) {
+				tt.execute(t -> {
+					processDeferredValueSets();
+					return null;
+				});
+			}
+			if (isDeferredConceptMaps()) {
+				tt.execute(t -> {
+					processDeferredConceptMaps();
+					return null;
+				});
+			}
+
+		}
 	}
 
 	@Override
@@ -237,6 +267,26 @@ public class TermDeferredStorageSvcImpl implements ITermDeferredStorageSvc {
 		jobDefinition.setId(BaseTermReadSvcImpl.class.getName() + "_saveDeferred");
 		jobDefinition.setJobClass(SaveDeferredJob.class);
 		mySchedulerService.scheduleFixedDelay(SCHEDULE_INTERVAL_MILLIS, false, jobDefinition);
+	}
+
+	@VisibleForTesting
+	void setTransactionManagerForUnitTest(PlatformTransactionManager theTxManager) {
+		myTransactionMgr = theTxManager;
+	}
+
+	@VisibleForTesting
+	void setDaoConfigForUnitTest(DaoConfig theDaoConfig) {
+		myDaoConfig = theDaoConfig;
+	}
+
+	@VisibleForTesting
+	void setCodeSystemStorageSvcForUnitTest(ITermCodeSystemStorageSvc theCodeSystemStorageSvc) {
+		myCodeSystemStorageSvc = theCodeSystemStorageSvc;
+	}
+
+	@VisibleForTesting
+	void setConceptDaoForUnitTest(ITermConceptDao theConceptDao) {
+		myConceptDao = theConceptDao;
 	}
 
 	public static class SaveDeferredJob extends FireAtIntervalJob {
